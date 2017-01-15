@@ -1,0 +1,113 @@
+#!/bin/bash
+
+VUE_APP_NAME=vueapp 
+PROJECT_NAME=project
+APP_NAME=app
+
+FULL_PATH=$PWD
+CURRENT_DIR=${PWD##*/} 
+result=${PWD##*/}          # to assign to a variable
+
+function create_vue_app {
+    set -x #echo on
+    cd $PROJECT_NAME
+    npm install -g vue-cli
+    npm install -g npm-check-updates
+    yes "" |  vue init webpack $VUE_APP_NAME
+    cd vueapp
+    npm-check-updates -u
+    npm install
+    npm run build
+    cd ..
+    set -x
+}
+
+function create_virtualenv {
+    set -x #echo on
+    virtualenv -p python3 venv
+    set -x
+}
+
+function activate_virtualenv {
+    source $FULL_PATH/venv/bin/activate
+}
+
+function create_requirements {
+cat << EOF > requirements.txt
+Django
+EOF
+}
+
+function install_requirements {
+    pip install --upgrade pip
+    pip install -Ur requirements.txt
+}
+
+function create_django_project {
+    django-admin startproject $PROJECT_NAME
+    mv ./requirements.txt $PROJECT_NAME
+}
+
+function create_django_app {
+    cd $PROJECT_NAME
+    python  manage.py startapp $APP_NAME
+}
+
+function update_requirements {
+cat << FOE >> $FULL_PATH/$PROJECT_NAME/requirements.txt
+django-webpack-loader
+gunicorn
+Whitenoise
+FOE
+    pip install -Ur $FULL_PATH/$PROJECT_NAME/requirements.txt
+}
+
+function create_webpack_settings {
+cat << EOF > $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings_webpack.py
+INSTALLED_APPS.append( 'webpack_loader',)
+
+WEBPACK_LOADER = {
+    'DEFAULT': {
+        'BUNDLE_DIR_NAME': 'static/',
+        'STATS_FILE': os.path.join(BASE_DIR, 'vueapp', 'webpack-stats.json')
+    }
+}
+EOF
+
+cat << FOE >> $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings.py
+
+try:
+    from settings_webpack import *
+except ImportError:
+    pass
+FOE
+}
+
+function upload_github {
+    cd $FULL_PATH/$PROJECT_NAME
+    REPO_NAME=deploy-test
+    USER_NAME=djstein
+    curl -u $USER_NAME https://api.github.com/user/repos -d "{\"name\":\"$REPO_NAME\"}"
+    cp $FULL_PATH/src/.gitignore .
+    git init
+    git remote add origin https://github.com/$USER_NAME/$REPO_NAME.git
+    git add .
+    git commit -m "Initial Commit"
+    git push -u origin master
+}
+
+create_virtualenv
+activate_virtualenv
+create_requirements
+install_requirements
+create_django_project
+create_django_app
+# create_vue_app
+update_requirements
+install_requirements
+create_webpack_settings
+
+upload_github
+# deploy_openshift
+
+exit;
