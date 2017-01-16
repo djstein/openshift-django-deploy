@@ -4,9 +4,12 @@ VUE_APP_NAME=vueapp
 PROJECT_NAME=project
 APP_NAME=app
 
+REPO_NAME=deploy-test
+USER_NAME=djstein
+GITHUB_REPO=https://github.com/$USER_NAME/$REPO_NAME.git
+
 FULL_PATH=$PWD
 CURRENT_DIR=${PWD##*/} 
-result=${PWD##*/}          # to assign to a variable
 
 function create_vue_app {
     set -x #echo on
@@ -62,9 +65,27 @@ FOE
     pip install -Ur $FULL_PATH/$PROJECT_NAME/requirements.txt
 }
 
-function create_webpack_settings {
-cat << EOF > $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings_webpack.py
+function create_settings_deploy {
+cat << EOF > $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings_deploy.py
+from project.settings import INSTALLED_APPS, ALLOWED_HOSTS
+
 INSTALLED_APPS.append( 'webpack_loader',)
+INSTALLED_APPS.append( 'app',)
+
+ALLOWED_HOSTS.append('*',)
+EOF
+
+cat << FOE >> $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings.py
+
+try:
+    from project.settings_deploy import *
+except ImportError:
+    pass
+FOE
+}
+
+function create_webpack_settings {
+cat << FOE >> $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings_deploy.py
 
 WEBPACK_LOADER = {
     'DEFAULT': {
@@ -72,31 +93,51 @@ WEBPACK_LOADER = {
         'STATS_FILE': os.path.join(BASE_DIR, 'vueapp', 'webpack-stats.json')
     }
 }
-EOF
-
-cat << FOE >> $FULL_PATH/$PROJECT_NAME/$PROJECT_NAME/settings.py
-
-try:
-    from settings_webpack import *
-except ImportError:
-    pass
 FOE
+}
+
+function setup_s2i_gunicorn {
+    cd $FULL_PATH/$PROJECT_NAME
+    mkdir .s2i
+cat << EOF > $FULL_PATH/$PROJECT_NAME/.s2i/environment
+APP_MODULE=project.wsgi
+APP_CONFIG=config.py
+DISABLE_MIGRATE=1
+EOF
+    
+    cd $FULL_PATH/$PROJECT_NAME
+cat << EOF > $FULL_PATH/$PROJECT_NAME/config.py
+import os
+
+workers = int(os.environ.get('GUNICORN_PROCESSES', '3'))
+threads = int(os.environ.get('GUNICORN_THREADS', '1'))
+
+forwarded_allow_ips = '*'
+secure_scheme_headers = { 'X-Forwarded-Proto': 'https' }
+EOF
 }
 
 function upload_github {
     cd $FULL_PATH/$PROJECT_NAME
-    REPO_NAME=deploy-test
-    USER_NAME=djstein
     curl -u $USER_NAME https://api.github.com/user/repos -d "{\"name\":\"$REPO_NAME\"}"
-    cp $FULL_PATH/src/.gitignore .
+    cp $FULL_PATH/.gitignore .
     git init
-    git remote add origin https://github.com/$USER_NAME/$REPO_NAME.git
+    git remote add origin $GITHUB_REPO
     git add .
     git commit -m "Initial Commit"
     git push -u origin master
+    
+    # Sync git repos when multiple gits are in a directory / subdirectory
+    git submodule sync
+    git submodule update
 }
 
-create_virtualenv
+function deploy_openshift {
+    # oc new-project $PROJECT_NAME --description=$DESCRIPTION --display-name=$DISPLAY_NAME
+    oc new-app $GITHUB_REPO python:latest
+}
+
+# create_virtualenv
 activate_virtualenv
 create_requirements
 install_requirements
@@ -104,10 +145,10 @@ create_django_project
 create_django_app
 # create_vue_app
 update_requirements
-install_requirements
-create_webpack_settings
-
+create_settings_deploy
+# create_webpack_settings
+setup_s2i_gunicorn
 upload_github
-# deploy_openshift
+deploy_openshift
 
 exit;
